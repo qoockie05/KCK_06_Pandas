@@ -1,11 +1,12 @@
 import math
 import cv2
 import mediapipe as mp
-#czesc
-CAMERA_FRONT_INDEX = 0
-CAMERA_SIDE_INDEX = 1
+
+# Indeksy kamer
+CAMERA_FRONT_INDEX = 1
+CAMERA_SIDE_INDEX = 0
 TARGET_HEIGHT = 480
-WINDOW_NAME = "Glute Bridge - Trener"
+WINDOW_NAME = "Glute Bridge - Trener (Fazy i Powtorzenia)"
 SHOW_ONLY_SKELETON = False
 
 GREEN = (0, 255, 0)
@@ -134,7 +135,7 @@ def get_side_points(landmarks, w, h):
 
     points = {
         "side": side,
-        "ear": p("EAR"),  # <-- DODANE UCHO
+        "ear": p("EAR"),
         "shoulder": p("SHOULDER"),
         "elbow": p("ELBOW"),
         "wrist": p("WRIST"),
@@ -199,8 +200,8 @@ def pick_support_and_raised(points):
     return support, raised
 
 
-def detect_phase_side(points, target_phase, prev_raised_leg=None):
-    ear = points["ear"]  # <-- POBRANE UCHO
+def detect_phase_side(points, check_phase, prev_raised_leg=None):
+    ear = points["ear"]
     shoulder = points["shoulder"]
     elbow = points["elbow"]
     wrist = points["wrist"]
@@ -211,7 +212,7 @@ def detect_phase_side(points, target_phase, prev_raised_leg=None):
     support_ankle = support["ankle"]
     support_foot = support["foot"]
 
-    neck_angle = line_angle_deg(shoulder, ear)  # <-- Kąt szyi
+    neck_angle = line_angle_deg(shoulder, ear)
     trunk_angle = line_angle_deg(shoulder, hip)
     support_thigh_angle = line_angle_deg(hip, support_knee)
     support_shin_angle = line_angle_deg(support_knee, support_ankle)
@@ -220,28 +221,32 @@ def detect_phase_side(points, target_phase, prev_raised_leg=None):
 
     hip_to_line = point_line_distance(hip, shoulder, support_knee)
 
-    # NOWE WARUNKI: Kąt zbliżony do 0 lub 180 oznacza leżenie poziomo na ziemi
-    tulow_lezy = trunk_angle is not None and (trunk_angle <= 35 or trunk_angle >= 145)
-    glowa_na_macie = neck_angle is not None and (neck_angle <= 35 or neck_angle >= 145)
+    # Zluzowane kąty tułowia i głowy
+    tulow_lezy = trunk_angle is not None and (trunk_angle <= 40 or trunk_angle >= 140)
+    glowa_na_macie = neck_angle is not None and (neck_angle <= 40 or neck_angle >= 140)
 
     raised_leg_up = raised["ankle"][1] < hip[1] - 40
     raised_leg_straight = False
     raised_leg_angle = angle(raised["hip"], raised["knee"], raised["ankle"])
     if raised_leg_angle is not None:
-        raised_leg_straight = raised_leg_angle >= 155
+        raised_leg_straight = raised_leg_angle >= 150  # Delikatnie luźniejsza "prosta" noga
 
+    # --- ZMIANY TUTAJ: Większy zakres kątów dla kolan i piszczeli ---
     stage1 = {
-        "nogi_ugiete": support_knee_angle is not None and 70 <= support_knee_angle <= 125,
-        "tulow_lezy": tulow_lezy,  # <-- SPRAWDZAMY CZY LEŻYSZ, A NIE CZY SIEDZISZ
+        "nogi_ugiete": support_knee_angle is not None and 50 <= support_knee_angle <= 145,  # Dużo luźniej (było 70-125)
+        "obie_stopy_na_ziemi": not raised_leg_up,
+        "tulow_lezy": tulow_lezy,
         "rece_przy_ciele": arm_angle is not None and arm_angle >= 145,
-        "glowa_na_macie": glowa_na_macie,  # <-- SPRAWDZAMY GŁOWĘ
+        "glowa_na_macie": glowa_na_macie,
     }
 
     stage2 = {
         "linia_mostka": trunk_angle is not None and support_thigh_angle is not None and abs(
-            trunk_angle - support_thigh_angle) <= 20,
-        "kolano": support_knee_angle is not None and 70 <= support_knee_angle <= 120,
-        "piszczel": support_shin_angle is not None and 65 <= support_shin_angle <= 115,
+            trunk_angle - support_thigh_angle) <= 25,  # Większy luz na miednicę
+        "kolano": support_knee_angle is not None and 50 <= support_knee_angle <= 145,  # Dużo luźniej (było 70-120)
+        "piszczel": support_shin_angle is not None and 50 <= support_shin_angle <= 130,
+        # Piszczele nie muszą być idealnie pionowo
+        "obie_stopy_na_ziemi": not raised_leg_up,
         "rece_przy_ciele": arm_angle is not None and arm_angle >= 145,
         "glowa_na_macie": glowa_na_macie,
     }
@@ -266,14 +271,13 @@ def detect_phase_side(points, target_phase, prev_raised_leg=None):
         "raised": raised,
     }
 
-    # Stan maszyny
-    if target_phase == 1:
+    if check_phase == 1:
         return stage1, all(stage1.values()), metrics
-    elif target_phase == 2:
+    elif check_phase == 2:
         return stage2, all(stage2.values()), metrics
-    elif target_phase == 3:
+    elif check_phase == 3:
         return stage3, all(stage3.values()), metrics
-    elif target_phase == 4:
+    elif check_phase == 4:
         stage4 = stage3.copy()
         if prev_raised_leg is not None:
             stage4["zmiana_nogi"] = (raised["name"] != prev_raised_leg)
@@ -284,7 +288,7 @@ def detect_phase_side(points, target_phase, prev_raised_leg=None):
     return {}, False, metrics
 
 
-def evaluate_front(points, target_phase):
+def evaluate_front(points, check_phase):
     hip_width = dist(points["l_hip"], points["r_hip"])
     knee_width = dist(points["l_knee"], points["r_knee"])
     ankle_width = dist(points["l_ankle"], points["r_ankle"])
@@ -312,7 +316,7 @@ def evaluate_front(points, target_phase):
         "rece_sym": wrist_level <= tol_w and arms_span_diff <= max(20, shoulder_width * 0.2),
     }
 
-    if target_phase in (1, 2):
+    if check_phase in (1, 2):
         checks = {
             **base,
             "kolana_sym": knee_level <= tol_k,
@@ -335,7 +339,7 @@ def draw_phase1(frame, p, checks):
     draw_segment(frame, p["knee"], p["ankle"], checks.get("nogi_ugiete", False))
     draw_segment(frame, p["shoulder"], p["elbow"], checks.get("rece_przy_ciele", False))
     draw_segment(frame, p["elbow"], p["wrist"], checks.get("rece_przy_ciele", False))
-    draw_segment(frame, p["shoulder"], p["ear"], checks.get("glowa_na_macie", False))  # <-- LINIA SZYI
+    draw_segment(frame, p["shoulder"], p["ear"], checks.get("glowa_na_macie", False))
 
     draw_joint(frame, p["shoulder"],
                checks.get("tulow_lezy", False) and checks.get("rece_przy_ciele", False) and checks.get("glowa_na_macie",
@@ -345,7 +349,7 @@ def draw_phase1(frame, p, checks):
     draw_joint(frame, p["ankle"], checks.get("nogi_ugiete", False))
     draw_joint(frame, p["elbow"], checks.get("rece_przy_ciele", False))
     draw_joint(frame, p["wrist"], checks.get("rece_przy_ciele", False))
-    draw_joint(frame, p["ear"], checks.get("glowa_na_macie", False))  # <-- KROPKA NA GŁOWIE
+    draw_joint(frame, p["ear"], checks.get("glowa_na_macie", False))
 
 
 def draw_phase2(frame, p, checks):
@@ -392,7 +396,7 @@ def draw_phase3(frame, p, checks, raised):
     draw_joint(frame, raised["ankle"], noga_ok)
 
 
-def process_side_view(frame, pose_model, target_phase, prev_raised_leg=None, skeleton_only=False):
+def process_side_view(frame, pose_model, check_phase, prev_raised_leg=None, skeleton_only=False):
     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     results = pose_model.process(rgb)
     output = frame.copy()
@@ -406,22 +410,24 @@ def process_side_view(frame, pose_model, target_phase, prev_raised_leg=None, ske
     h, w = output.shape[:2]
     p = get_side_points(results.pose_landmarks.landmark, w, h)
 
-    checks, overall, metrics = detect_phase_side(p, target_phase, prev_raised_leg)
+    checks, overall, metrics = detect_phase_side(p, check_phase, prev_raised_leg)
 
-    if target_phase == 1:
+    if check_phase == 1:
         draw_phase1(output, p, checks)
-        # DODANO DO PANELU: Tułów i głowę
-        rows = [("Nogi ugiete", checks.get("nogi_ugiete", False)), ("Tulow lezy", checks.get("tulow_lezy", False)),
+        rows = [("Nogi ugiete", checks.get("nogi_ugiete", False)),
+                ("Obie stopy na macie", checks.get("obie_stopy_na_ziemi", False)),
+                ("Tulow lezy", checks.get("tulow_lezy", False)),
                 ("Glowa na macie", checks.get("glowa_na_macie", False)),
                 ("Rece przy ciele", checks.get("rece_przy_ciele", False))]
         title = "BOK: FAZA 1" if overall else "BOK: FAZA 1 - korekta"
-    elif target_phase == 2:
+    elif check_phase == 2:
         draw_phase2(output, p, checks)
         rows = [("Linia bark-biodro", checks.get("linia_mostka", False)), ("Kolano", checks.get("kolano", False)),
+                ("Obie stopy na macie", checks.get("obie_stopy_na_ziemi", False)),
                 ("Piszczel", checks.get("piszczel", False)), ("Glowa na macie", checks.get("glowa_na_macie", False)),
                 ("Rece", checks.get("rece_przy_ciele", False))]
         title = "BOK: FAZA 2" if overall else "BOK: FAZA 2 - korekta"
-    elif target_phase in (3, 4):
+    elif check_phase in (3, 4):
         draw_phase3(output, p, checks, metrics["raised"])
         rows = [
             ("Linia bark-biodro", checks.get("linia_mostka", False)),
@@ -431,9 +437,9 @@ def process_side_view(frame, pose_model, target_phase, prev_raised_leg=None, ske
             ("Noga prosta", checks.get("noga_prosta", False)),
             ("Glowa na macie", checks.get("glowa_na_macie", False))
         ]
-        if target_phase == 4:
+        if check_phase == 4:
             rows.append(("Zmiana nogi", checks.get("zmiana_nogi", False)))
-        title = f"BOK: FAZA {target_phase}" if overall else f"BOK: FAZA {target_phase} - korekta"
+        title = f"BOK: FAZA {check_phase}" if overall else f"BOK: FAZA {check_phase} - korekta"
     else:
         rows = [("Zakonczono", True)]
         title = "BOK: ZAKONCZONO"
@@ -445,7 +451,7 @@ def process_side_view(frame, pose_model, target_phase, prev_raised_leg=None, ske
     return output, overall, metrics
 
 
-def process_front_view(frame, pose_model, target_phase, skeleton_only=False):
+def process_front_view(frame, pose_model, check_phase, skeleton_only=False):
     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     results = pose_model.process(rgb)
     output = frame.copy()
@@ -458,7 +464,7 @@ def process_front_view(frame, pose_model, target_phase, skeleton_only=False):
 
     h, w = output.shape[:2]
     p = get_front_points(results.pose_landmarks.landmark, w, h)
-    checks, metrics, overall = evaluate_front(p, target_phase)
+    checks, metrics, overall = evaluate_front(p, check_phase)
 
     arms_ok = checks.get("rece_sym", False)
     hips_ok = checks.get("biodra_sym", False)
@@ -473,7 +479,7 @@ def process_front_view(frame, pose_model, target_phase, skeleton_only=False):
     draw_segment(output, p["r_shoulder"], p["r_hip"], hips_ok)
     draw_segment(output, p["l_hip"], p["r_hip"], hips_ok)
 
-    if target_phase in (1, 2):
+    if check_phase in (1, 2):
         draw_segment(output, p["l_hip"], p["l_knee"], knees_ok)
         draw_segment(output, p["r_hip"], p["r_knee"], knees_ok)
         draw_segment(output, p["l_knee"], p["l_ankle"], ankles_ok)
@@ -486,7 +492,7 @@ def process_front_view(frame, pose_model, target_phase, skeleton_only=False):
     for name in ["l_hip", "r_hip"]:
         draw_joint(output, p[name], hips_ok)
 
-    if target_phase in (1, 2):
+    if check_phase in (1, 2):
         rows = [("Biodra sym", checks.get("biodra_sym", False)), ("Kolana sym", checks.get("kolana_sym", False)),
                 ("Kolana nad stopami", checks.get("kolana_nad_stopami", False)),
                 ("Kostki sym", checks.get("kostki_sym", False)), ("Rece sym", checks.get("rece_sym", False))]
@@ -494,17 +500,18 @@ def process_front_view(frame, pose_model, target_phase, skeleton_only=False):
         rows = [("Biodra sym", checks.get("biodra_sym", False)),
                 ("Tulow stabilny", checks.get("stabilny_tulow", False)), ("Rece sym", checks.get("rece_sym", False))]
 
-    title = f"PRZOD: FAZA {target_phase}" if target_phase <= 4 else "PRZOD: ZAKONCZONO"
+    title = f"PRZOD: FAZA {check_phase} (Nie ocenia)" if check_phase <= 4 else "PRZOD: ZAKONCZONO"
     ratio_txt = f"kolana/stopy={metrics['ratio']:.2f}" if 'ratio' in metrics else ""
     output = draw_panel(output, title, rows, overall, ratio_txt)
-    cv2.putText(output, "Widok z przodu", (10, h - 15), cv2.FONT_HERSHEY_SIMPLEX, 0.7, YELLOW, 2, cv2.LINE_AA)
+    cv2.putText(output, "Widok z przodu (Tylko podglad)", (10, h - 15), cv2.FONT_HERSHEY_SIMPLEX, 0.7, YELLOW, 2,
+                cv2.LINE_AA)
 
     return output, overall
 
 
 def main():
-    cap_front = cv2.VideoCapture(CAMERA_SIDE_INDEX)
-    cap_side = cv2.VideoCapture(CAMERA_FRONT_INDEX)
+    cap_front = cv2.VideoCapture(CAMERA_FRONT_INDEX)
+    cap_side = cv2.VideoCapture(CAMERA_SIDE_INDEX)
 
     if not cap_front.isOpened():
         print(f"Nie udalo sie otworzyc kamery FRONT: {CAMERA_FRONT_INDEX}")
@@ -520,10 +527,13 @@ def main():
 
     skeleton_only = SHOW_ONLY_SKELETON
 
-    # Stan maszyny
-    target_phase = 1
+    # Maszyna stanow:
+    # 1: Start na macie, 2: Mostek, 3: Noga1 w gorze, 4: Mostek(powrot), 5: Noga2 w gorze
+    state = 1
+    reps = 0
+
     frames_held = 0
-    REQUIRED_FRAMES = 15  # Tyle klatek pod rzad uzytkownik musi trzymac poprawna pozycje
+    REQUIRED_FRAMES = 15
     prev_raised_leg = None
 
     while True:
@@ -536,53 +546,60 @@ def main():
         frame_front = resize_to_height(frame_front, TARGET_HEIGHT)
         frame_side = resize_to_height(frame_side, TARGET_HEIGHT)
 
-        if target_phase <= 4:
-            view_side, ok_side, metrics = process_side_view(frame_side, pose_side, target_phase, prev_raised_leg,
-                                                            skeleton_only=skeleton_only)
-            view_front, ok_front = process_front_view(frame_front, pose_front, target_phase,
-                                                      skeleton_only=skeleton_only)
+        # Mapowanie logiki stanu na fizyczne Fazy:
+        check_phase = {1: 1, 2: 2, 3: 3, 4: 2, 5: 4}[state]
 
-            overall_ok = ok_side and ok_front
+        view_side, ok_side_status, metrics = process_side_view(frame_side, pose_side, check_phase, prev_raised_leg,
+                                                               skeleton_only=skeleton_only)
+        view_front, ok_front_status = process_front_view(frame_front, pose_front, check_phase,
+                                                         skeleton_only=skeleton_only)
 
-            # Obsluga maszyny stanow
-            if overall_ok:
-                frames_held += 1
-                if frames_held >= REQUIRED_FRAMES:
-                    # Przechodzimy do nastepnej fazy
-                    if target_phase == 3 and "raised" in metrics:
-                        prev_raised_leg = metrics["raised"]["name"]
+        # Nadal testujemy narazie tylko po widoku bocznym
+        overall_ok = ok_side_status
 
-                    target_phase += 1
-                    frames_held = 0
-            else:
-                frames_held = max(0, frames_held - 1)
+        # Zmiana stanow (zliczanie czasu utrzymania pozycji)
+        if overall_ok:
+            frames_held += 1
+            if frames_held >= REQUIRED_FRAMES:
+                if state == 3 and "raised" in metrics:
+                    prev_raised_leg = metrics["raised"]["name"]
 
-            combined = cv2.hconcat([view_side, view_front])
+                state += 1
 
-            # Komunikaty dla asystenta (i na ekran)
-            if target_phase == 1:
-                msg = "PRZYGOTUJ SIE: LEZENIE (FAZA 1)"
-            elif target_phase == 2:
-                msg = "ZACZNIJ FAZE 2: UNIES BIODRA"
-            elif target_phase == 3:
-                msg = "ZACZNIJ FAZE 3: JEDNA NOGA W GORE"
-            elif target_phase == 4:
-                msg = "ZACZNIJ FAZE 4: ZMIANA NOGI"
+                # Zresetowanie po pelnym powtorzeniu!
+                if state > 5:
+                    reps += 1
+                    state = 1
+                    prev_raised_leg = None
 
-            color = GREEN if overall_ok else RED
-            cv2.putText(combined, msg, (20, combined.shape[0] - 30), cv2.FONT_HERSHEY_SIMPLEX, 0.9, color, 3,
-                        cv2.LINE_AA)
-
-            # Rysowanie paska postepu
-            if frames_held > 0:
-                bar_w = int(400 * (frames_held / REQUIRED_FRAMES))
-                cv2.rectangle(combined, (20, combined.shape[0] - 20), (20 + bar_w, combined.shape[0] - 10), GREEN, -1)
-
+                frames_held = 0
         else:
-            # Faza 5 - Zakonczono
-            combined = cv2.hconcat([frame_side, frame_front])
-            cv2.putText(combined, "CWICZENIE ZAKONCZONE SUKCESEM!", (50, int(TARGET_HEIGHT / 2)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 1.2, YELLOW, 3, cv2.LINE_AA)
+            frames_held = max(0, frames_held - 1)
+
+        combined = cv2.hconcat([view_side, view_front])
+
+        # Wyswietlanie licznika powtorzen w prawym gornym rogu
+        cv2.putText(combined, f"POWTORZENIA: {reps}", (combined.shape[1] - 250, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8,
+                    YELLOW, 2, cv2.LINE_AA)
+
+        # Komunikaty na ekran dla Asystenta
+        if state == 1:
+            msg = "PRZYGOTUJ SIE: OPUSC BIODRA (FAZA 1)"
+        elif state == 2:
+            msg = "ZACZNIJ FAZE 2: UNIES BIODRA"
+        elif state == 3:
+            msg = "FAZA 3: JEDNA NOGA W GORE"
+        elif state == 4:
+            msg = "POWROT DO FAZY 2: OPUSC NOGE, TRZYMAJ BIODRA"
+        elif state == 5:
+            msg = "FAZA 4: DRUGA NOGA W GORE"
+
+        color = GREEN if overall_ok else RED
+        cv2.putText(combined, msg, (20, combined.shape[0] - 30), cv2.FONT_HERSHEY_SIMPLEX, 0.9, color, 3, cv2.LINE_AA)
+
+        if frames_held > 0:
+            bar_w = int(400 * (frames_held / REQUIRED_FRAMES))
+            cv2.rectangle(combined, (20, combined.shape[0] - 20), (20 + bar_w, combined.shape[0] - 10), GREEN, -1)
 
         cv2.imshow(WINDOW_NAME, combined)
 
