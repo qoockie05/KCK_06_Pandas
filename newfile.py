@@ -1,7 +1,7 @@
 import math
 import cv2
 import mediapipe as mp
-
+#czesc
 CAMERA_FRONT_INDEX = 0
 CAMERA_SIDE_INDEX = 1
 TARGET_HEIGHT = 480
