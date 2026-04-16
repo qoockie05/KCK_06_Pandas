@@ -3,10 +3,10 @@ import cv2
 import mediapipe as mp
 
 # Indeksy kamer
-CAMERA_FRONT_INDEX = 0  # <--- Wbudowana w laptopa / telefon (Front)
+CAMERA_FRONT_INDEX = 0
 CAMERA_SIDE_INDEX = 1
 TARGET_HEIGHT = 480
-WINDOW_NAME = "Glute Bridge - Trener (TEST PRZODU Z NOGAMI)"
+WINDOW_NAME = "Glute Bridge - Trener (BOK + PRZOD NOGI)"
 SHOW_ONLY_SKELETON = False
 
 GREEN = (0, 255, 0)
@@ -289,27 +289,20 @@ def evaluate_front(points, check_phase):
     hip_width = dist(points["l_hip"], points["r_hip"])
     knee_width = dist(points["l_knee"], points["r_knee"])
     ankle_width = dist(points["l_ankle"], points["r_ankle"])
-    shoulder_width = dist(points["l_shoulder"], points["r_shoulder"])
 
     hip_level = abs(points["l_hip"][1] - points["r_hip"][1])
     knee_level = abs(points["l_knee"][1] - points["r_knee"][1])
-    ankle_level = abs(points["l_ankle"][1] - points["r_ankle"][1])
-    wrist_level = abs(points["l_wrist"][1] - points["r_wrist"][1])
 
-    # --- ZMIANA: Ogromnie zluzowane tolerancje asymetrii dla widoku z przodu ---
+    # Odrzucilismy calkowicie sprawdzanie ramion i barkow z przodu
     tol_h = max(25, hip_width * 0.20)
     tol_k = max(35, knee_width * 0.25 if knee_width > 0 else 35)
-    tol_w = max(30, shoulder_width * 0.25)
     tol_mid = max(40, ankle_width * 0.30 if ankle_width > 0 else 40)
 
     knee_over_ankle_l = abs(points["l_knee"][0] - points["l_ankle"][0])
     knee_over_ankle_r = abs(points["r_knee"][0] - points["r_ankle"][0])
 
-    arms_span_diff = abs(dist(points["l_shoulder"], points["l_wrist"]) - dist(points["r_shoulder"], points["r_wrist"]))
-
     base = {
         "biodra_sym": hip_level <= tol_h,
-        "rece_sym": wrist_level <= tol_w and arms_span_diff <= max(40, shoulder_width * 0.3),
     }
 
     if check_phase in (1, 2):
@@ -319,21 +312,19 @@ def evaluate_front(points, check_phase):
             "kolana_nad_stopami": knee_over_ankle_l <= tol_mid and knee_over_ankle_r <= tol_mid,
         }
     elif check_phase == 3:
-        # Prawa noga w gorze (Wspolrzedna Y prawej kostki musi byc wyraznie mniejsza niz lewej)
         prawa_wyzej = points["r_ankle"][1] < points["l_ankle"][1] - 30
         checks = {
             **base,
             "prawa_noga_w_gorze": prawa_wyzej
         }
     elif check_phase == 4:
-        # Lewa noga w gorze
         lewa_wyzej = points["l_ankle"][1] < points["r_ankle"][1] - 30
         checks = {
             **base,
             "lewa_noga_w_gorze": lewa_wyzej
         }
 
-    metrics = {"ratio": 0}  # Ratio ignorujemy z przodu, za duzo falszywych bledow
+    metrics = {"ratio": 0}
     return checks, metrics, all(checks.values())
 
 
@@ -345,6 +336,69 @@ def draw_phase1_2_front(frame, p, checks):
     draw_segment(frame, p["r_knee"], p["r_ankle"], knees_ok)
     for name in ["l_knee", "r_knee", "l_ankle", "r_ankle"]:
         draw_joint(frame, p[name], knees_ok)
+
+
+def draw_phase1(frame, p, checks):
+    draw_segment(frame, p["shoulder"], p["hip"], checks.get("tulow_lezy", False))
+    draw_segment(frame, p["hip"], p["knee"], checks.get("nogi_ugiete", False))
+    draw_segment(frame, p["knee"], p["ankle"], checks.get("nogi_ugiete", False))
+    draw_segment(frame, p["shoulder"], p["elbow"], checks.get("rece_przy_ciele", False))
+    draw_segment(frame, p["elbow"], p["wrist"], checks.get("rece_przy_ciele", False))
+    draw_segment(frame, p["shoulder"], p["ear"], checks.get("glowa_na_macie", False))
+
+    draw_joint(frame, p["shoulder"],
+               checks.get("tulow_lezy", False) and checks.get("rece_przy_ciele", False) and checks.get("glowa_na_macie",
+                                                                                                       False))
+    draw_joint(frame, p["hip"], checks.get("tulow_lezy", False))
+    draw_joint(frame, p["knee"], checks.get("nogi_ugiete", False))
+    draw_joint(frame, p["ankle"], checks.get("nogi_ugiete", False))
+    draw_joint(frame, p["elbow"], checks.get("rece_przy_ciele", False))
+    draw_joint(frame, p["wrist"], checks.get("rece_przy_ciele", False))
+    draw_joint(frame, p["ear"], checks.get("glowa_na_macie", False))
+
+
+def draw_phase2(frame, p, checks):
+    draw_segment(frame, p["shoulder"], p["hip"], checks.get("linia_mostka", False))
+    draw_segment(frame, p["hip"], p["knee"], checks.get("linia_mostka", False))
+    draw_segment(frame, p["knee"], p["ankle"], checks.get("piszczel", False))
+    draw_segment(frame, p["shoulder"], p["elbow"], checks.get("rece_przy_ciele", False))
+    draw_segment(frame, p["elbow"], p["wrist"], checks.get("rece_przy_ciele", False))
+    draw_segment(frame, p["shoulder"], p["ear"], checks.get("glowa_na_macie", False))
+
+    draw_joint(frame, p["shoulder"],
+               checks.get("linia_mostka", False) and checks.get("rece_przy_ciele", False) and checks.get(
+                   "glowa_na_macie", False))
+    draw_joint(frame, p["hip"], checks.get("linia_mostka", False))
+    draw_joint(frame, p["knee"], checks.get("kolano", False))
+    draw_joint(frame, p["ankle"], checks.get("piszczel", False))
+    draw_joint(frame, p["elbow"], checks.get("rece_przy_ciele", False))
+    draw_joint(frame, p["wrist"], checks.get("rece_przy_ciele", False))
+    draw_joint(frame, p["ear"], checks.get("glowa_na_macie", False))
+
+
+def draw_phase3(frame, p, checks, raised):
+    draw_segment(frame, p["shoulder"], p["hip"], checks.get("linia_mostka", False))
+    draw_segment(frame, p["hip"], p["knee"], checks.get("linia_mostka", False))
+    draw_segment(frame, p["knee"], p["ankle"], checks.get("piszczel", False))
+    draw_segment(frame, p["shoulder"], p["elbow"], checks.get("rece_przy_ciele", False))
+    draw_segment(frame, p["elbow"], p["wrist"], checks.get("rece_przy_ciele", False))
+    draw_segment(frame, p["shoulder"], p["ear"], checks.get("glowa_na_macie", False))
+
+    noga_ok = checks.get("noga_w_gorze", False) and checks.get("noga_prosta", False)
+    draw_segment(frame, raised["hip"], raised["knee"], noga_ok)
+    draw_segment(frame, raised["knee"], raised["ankle"], noga_ok)
+
+    draw_joint(frame, p["shoulder"],
+               checks.get("linia_mostka", False) and checks.get("rece_przy_ciele", False) and checks.get(
+                   "glowa_na_macie", False))
+    draw_joint(frame, p["hip"], checks.get("linia_mostka", False))
+    draw_joint(frame, p["knee"], checks.get("kolano_podporowe", False))
+    draw_joint(frame, p["ankle"], checks.get("piszczel", False))
+    draw_joint(frame, p["elbow"], checks.get("rece_przy_ciele", False))
+    draw_joint(frame, p["wrist"], checks.get("rece_przy_ciele", False))
+    draw_joint(frame, p["ear"], checks.get("glowa_na_macie", False))
+    draw_joint(frame, raised["knee"], checks.get("noga_prosta", False))
+    draw_joint(frame, raised["ankle"], noga_ok)
 
 
 def process_side_view(frame, pose_model, check_phase, prev_raised_leg=None, skeleton_only=False):
@@ -362,6 +416,43 @@ def process_side_view(frame, pose_model, check_phase, prev_raised_leg=None, skel
     p = get_side_points(results.pose_landmarks.landmark, w, h)
 
     checks, overall, metrics = detect_phase_side(p, check_phase, prev_raised_leg)
+
+    if check_phase == 1:
+        draw_phase1(output, p, checks)
+        rows = [("Nogi ugiete", checks.get("nogi_ugiete", False)),
+                ("Obie stopy na macie", checks.get("obie_stopy_na_ziemi", False)),
+                ("Tulow lezy", checks.get("tulow_lezy", False)),
+                ("Glowa na macie", checks.get("glowa_na_macie", False)),
+                ("Rece przy ciele", checks.get("rece_przy_ciele", False))]
+        title = "BOK: FAZA 1" if overall else "BOK: FAZA 1 - korekta"
+    elif check_phase == 2:
+        draw_phase2(output, p, checks)
+        rows = [("Linia bark-biodro", checks.get("linia_mostka", False)), ("Kolano", checks.get("kolano", False)),
+                ("Obie stopy na macie", checks.get("obie_stopy_na_ziemi", False)),
+                ("Piszczel", checks.get("piszczel", False)), ("Glowa na macie", checks.get("glowa_na_macie", False)),
+                ("Rece", checks.get("rece_przy_ciele", False))]
+        title = "BOK: FAZA 2" if overall else "BOK: FAZA 2 - korekta"
+    elif check_phase in (3, 4):
+        draw_phase3(output, p, checks, metrics["raised"])
+        rows = [
+            ("Linia bark-biodro", checks.get("linia_mostka", False)),
+            ("Kolano podporowe", checks.get("kolano_podporowe", False)),
+            ("Piszczel", checks.get("piszczel", False)),
+            ("Noga w gorze", checks.get("noga_w_gorze", False)),
+            ("Noga prosta", checks.get("noga_prosta", False)),
+            ("Glowa na macie", checks.get("glowa_na_macie", False))
+        ]
+        if check_phase == 4:
+            rows.append(("Zmiana nogi", checks.get("zmiana_nogi", False)))
+        title = f"BOK: FAZA {check_phase}" if overall else f"BOK: FAZA {check_phase} - korekta"
+    else:
+        rows = [("Zakonczono", True)]
+        title = "BOK: ZAKONCZONO"
+
+    extra = f"kolano={int(metrics['support_knee_angle']) if metrics['support_knee_angle'] is not None else -1}"
+    output = draw_panel(output, title, rows, overall, extra)
+    cv2.putText(output, "Widok boczny", (10, h - 15), cv2.FONT_HERSHEY_SIMPLEX, 0.7, YELLOW, 2, cv2.LINE_AA)
+
     return output, overall, metrics
 
 
@@ -380,19 +471,10 @@ def process_front_view(frame, pose_model, check_phase, skeleton_only=False):
     p = get_front_points(results.pose_landmarks.landmark, w, h)
     checks, metrics, overall = evaluate_front(p, check_phase)
 
-    arms_ok = checks.get("rece_sym", False)
     hips_ok = checks.get("biodra_sym", False)
 
-    # Rysowanie rak i miednicy
-    draw_segment(output, p["l_shoulder"], p["l_elbow"], arms_ok)
-    draw_segment(output, p["l_elbow"], p["l_wrist"], arms_ok)
-    draw_segment(output, p["r_shoulder"], p["r_elbow"], arms_ok)
-    draw_segment(output, p["r_elbow"], p["r_wrist"], arms_ok)
-    draw_segment(output, p["l_shoulder"], p["l_hip"], hips_ok)
-    draw_segment(output, p["r_shoulder"], p["r_hip"], hips_ok)
+    # ZMIANA: Z przodu rysujemy wylacznie miednice i nogi. Ignorujemy rece i barki.
     draw_segment(output, p["l_hip"], p["r_hip"], hips_ok)
-    for name in ["l_shoulder", "r_shoulder", "l_elbow", "r_elbow", "l_wrist", "r_wrist"]:
-        draw_joint(output, p[name], arms_ok)
     for name in ["l_hip", "r_hip"]:
         draw_joint(output, p[name], hips_ok)
 
@@ -400,8 +482,7 @@ def process_front_view(frame, pose_model, check_phase, skeleton_only=False):
     if check_phase in (1, 2):
         draw_phase1_2_front(output, p, checks)
         rows = [("Biodra sym", checks.get("biodra_sym", False)), ("Kolana sym", checks.get("kolana_sym", False)),
-                ("Kolana nad stopami", checks.get("kolana_nad_stopami", False)),
-                ("Rece sym", checks.get("rece_sym", False))]
+                ("Kolana nad stopami", checks.get("kolana_nad_stopami", False))]
 
     elif check_phase == 3:  # Prawa noga
         prawa_ok = checks.get("prawa_noga_w_gorze", False)
@@ -409,9 +490,10 @@ def process_front_view(frame, pose_model, check_phase, skeleton_only=False):
         draw_segment(output, p["r_knee"], p["r_ankle"], prawa_ok)
         draw_segment(output, p["l_hip"], p["l_knee"], True)  # Noga oparta jest zielona
         draw_segment(output, p["l_knee"], p["l_ankle"], True)
+        for name in ["r_knee", "r_ankle"]: draw_joint(output, p[name], prawa_ok)
+        for name in ["l_knee", "l_ankle"]: draw_joint(output, p[name], True)
         rows = [("Biodra sym", checks.get("biodra_sym", False)),
-                ("PRAWA noga w gorze", checks.get("prawa_noga_w_gorze", False)),
-                ("Rece sym", checks.get("rece_sym", False))]
+                ("PRAWA noga w gorze", checks.get("prawa_noga_w_gorze", False))]
 
     elif check_phase == 4:  # Lewa noga
         lewa_ok = checks.get("lewa_noga_w_gorze", False)
@@ -419,13 +501,14 @@ def process_front_view(frame, pose_model, check_phase, skeleton_only=False):
         draw_segment(output, p["l_knee"], p["l_ankle"], lewa_ok)
         draw_segment(output, p["r_hip"], p["r_knee"], True)  # Noga oparta jest zielona
         draw_segment(output, p["r_knee"], p["r_ankle"], True)
+        for name in ["l_knee", "l_ankle"]: draw_joint(output, p[name], lewa_ok)
+        for name in ["r_knee", "r_ankle"]: draw_joint(output, p[name], True)
         rows = [("Biodra sym", checks.get("biodra_sym", False)),
-                ("LEWA noga w gorze", checks.get("lewa_noga_w_gorze", False)),
-                ("Rece sym", checks.get("rece_sym", False))]
+                ("LEWA noga w gorze", checks.get("lewa_noga_w_gorze", False))]
 
     title = f"PRZOD: FAZA {check_phase}" if overall else f"PRZOD: FAZA {check_phase} - korekta"
     output = draw_panel(output, title, rows, overall, "")
-    cv2.putText(output, "Widok z przodu (GLOWNY TESTER)", (10, h - 15), cv2.FONT_HERSHEY_SIMPLEX, 0.7, YELLOW, 2,
+    cv2.putText(output, "Widok z przodu (TYLKO NOGI I BIODRA)", (10, h - 15), cv2.FONT_HERSHEY_SIMPLEX, 0.7, YELLOW, 2,
                 cv2.LINE_AA)
 
     return output, overall
@@ -473,8 +556,8 @@ def main():
         view_front, ok_front_status = process_front_view(frame_front, pose_front, check_phase,
                                                          skeleton_only=skeleton_only)
 
-        # --- TERAZ OPIERAMY SIE TYLKO NA WIDOKU Z PRZODU ---
-        overall_ok = ok_front_status
+        # --- ZMIANA: TERAZ WYMAGAMY OBU KAMER (Bok i Przód) ---
+        overall_ok = ok_side_status and ok_front_status
 
         if overall_ok:
             frames_held += 1
