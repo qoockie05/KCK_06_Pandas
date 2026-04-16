@@ -7,38 +7,36 @@ import queue
 
 
 # ==========================================
-# ASYSTENT GŁOSOWY (Działa w osobnym wątku)
+# ASYSTENT GŁOSOWY (Zintegrowany w 1 pliku)
 # ==========================================
 class VoiceAssistant:
     def __init__(self):
-        self.engine = pyttsx3.init()
-
-        # Próba znalezienia polskiego głosu (w Windowsie zazwyczaj jest zainstalowana 'Paulina')
-        voices = self.engine.getProperty('voices')
-        for voice in voices:
-            if 'pl' in voice.id or 'polish' in voice.name.lower() or 'poland' in voice.name.lower():
-                self.engine.setProperty('voice', voice.id)
-                break
-
-        # Ustawienie tempa mówienia (150 to optymalne, naturalne tempo)
-        self.engine.setProperty('rate', 150)
-
-        # Kolejka komunikatów i wątek
         self.q = queue.Queue()
+        # Wątek startuje od razu w tle, żeby nie blokować kamery
         self.thread = threading.Thread(target=self._worker, daemon=True)
         self.thread.start()
 
     def _worker(self):
+        # Inicjalizacja pyttsx3 musi odbyć się wewnątrz wątku!
+        engine = pyttsx3.init()
+
+        voices = engine.getProperty('voices')
+        for voice in voices:
+            if 'pl' in voice.id or 'polish' in voice.name.lower() or 'poland' in voice.name.lower():
+                engine.setProperty('voice', voice.id)
+                break
+
+        engine.setProperty('rate', 150)
+
         while True:
             msg = self.q.get()
             if msg is None:
                 break
-            self.engine.say(msg)
-            self.engine.runAndWait()
+            engine.say(msg)
+            engine.runAndWait()
             self.q.task_done()
 
     def speak(self, text):
-        # Wrzuca tekst do kolejki, nie blokując kamery
         self.q.put(text)
 
 
@@ -48,7 +46,7 @@ class VoiceAssistant:
 CAMERA_FRONT_INDEX = 0
 CAMERA_SIDE_INDEX = 1
 TARGET_HEIGHT = 480
-WINDOW_NAME = "Glute Bridge - Trener (GŁOSOWY)"
+WINDOW_NAME = "Glute Bridge - Trener"
 SHOW_ONLY_SKELETON = False
 
 GREEN = (0, 255, 0)
@@ -314,7 +312,6 @@ def process_side_view(frame, pose_model, check_phase, prev_raised_leg=None, skel
     p = get_side_points(results.pose_landmarks.landmark, w, h)
     checks, overall, metrics = detect_phase_side(p, check_phase, prev_raised_leg)
 
-    # Rysowanie (skrocone w kodzie wizualnym zeby zrobic miejsce, dziala identycznie)
     for seg in [(p["shoulder"], p["hip"]), (p["hip"], p["knee"]), (p["knee"], p["ankle"]), (p["shoulder"], p["elbow"]),
                 (p["elbow"], p["wrist"]), (p["shoulder"], p["ear"])]:
         draw_segment(output, seg[0], seg[1], overall)
@@ -337,14 +334,17 @@ def process_front_view(frame, pose_model, check_phase, skeleton_only=False):
     output = frame.copy()
     if skeleton_only: output[:] = (0, 0, 0)
 
+    h, w = output.shape[:2]
+
     if not results.pose_landmarks:
         if check_phase == 1:
-            output = draw_panel(output, "PRZOD: FAZA 1 - Kadr ucięty", [("Brak sylwetki, polegam na boku", False)],
+            output = draw_panel(output, "PRZOD: FAZA 1 - Kadr uciety", [("Brak sylwetki, polegam na boku", False)],
                                 True, "")
+            cv2.putText(output, "Popraw kadr, uciete stopy!", (10, h - 15), cv2.FONT_HERSHEY_SIMPLEX, 0.7, YELLOW, 2,
+                        cv2.LINE_AA)
             return output, True
         return output, False
 
-    h, w = output.shape[:2]
     p = get_front_points(results.pose_landmarks.landmark, w, h)
     checks, metrics, overall = evaluate_front(p, check_phase)
 
@@ -367,7 +367,7 @@ def process_front_view(frame, pose_model, check_phase, skeleton_only=False):
 
 
 def main():
-    # Inicjalizacja asystenta głosowego
+    # Inicjalizujemy asystenta na samym początku
     assistant = VoiceAssistant()
 
     cap_front = cv2.VideoCapture(CAMERA_FRONT_INDEX)
@@ -379,7 +379,7 @@ def main():
 
     skeleton_only = SHOW_ONLY_SKELETON
     state = 1
-    prev_state = 0  # Do śledzenia momentu zmiany stanu i puszczania komunikatu
+    prev_state = 0
     reps = 0
     frames_held = 0
     REQUIRED_FRAMES = 15
@@ -395,34 +395,38 @@ def main():
         frame_side = resize_to_height(frame_side, TARGET_HEIGHT)
 
         # ==========================================
-        # LOGIKA ASYSTENTA GŁOSOWEGO (Tylko przy zmianie stanu!)
+        # GŁOSOWE KOMUNIKATY I KONWERSACJA
         # ==========================================
         if state != prev_state:
             if state == 1:
                 if reps == 0:
-                    assistant.speak("Przygotuj się. Połóż się na macie i opuść biodra do fazy pierwszej.")
+                    assistant.speak(
+                        "Witaj, zaczynajmy! Przygotuj się do fazy pierwszej. Połóż się na macie i opuść biodra.")
                 else:
                     assistant.speak(
-                        f"Brawo, {reps} powtórzenie za tobą! Połóż się, odpocznij i przygotuj się do kolejnego.")
+                        f"Brawo, {reps} powtórzenie za tobą! Odpocznij chwilę i przygotuj się do fazy pierwszej.")
             elif state == 2:
-                assistant.speak("Faza pierwsza zaliczona. Zacznij fazę drugą: unieś biodra.")
+                assistant.speak("Dobra, super! To teraz faza druga: unieś biodra.")
             elif state == 3:
-                assistant.speak("Faza druga zaliczona. Zacznij fazę trzecią: prawa noga w górę.")
+                assistant.speak("Świetnie! Teraz faza trzecia: prawa noga w górę.")
             elif state == 4:
-                assistant.speak("Faza trzecia zaliczona. Wróć do fazy drugiej: opuść nogę, ale trzymaj biodra w górze.")
+                assistant.speak("Bardzo dobrze. Wróć do fazy drugiej: opuść nogę, trzymaj biodra w górze.")
             elif state == 5:
-                assistant.speak("Faza druga zaliczona. Zacznij fazę czwartą: lewa noga w górę.")
+                assistant.speak("Super! Teraz faza czwarta: lewa noga w górę.")
 
-            prev_state = state  # Zapisujemy, żeby nie powtarzał w kółko tego samego
+            prev_state = state
 
         check_phase = {1: 1, 2: 2, 3: 3, 4: 2, 5: 4}[state]
+
         view_side, ok_side_status, metrics = process_side_view(frame_side, pose_side, check_phase, prev_raised_leg,
                                                                skeleton_only=skeleton_only)
         view_front, ok_front_status = process_front_view(frame_front, pose_front, check_phase,
                                                          skeleton_only=skeleton_only)
 
+        # Współpraca dwóch kamer z obejściem zepsutego kadru frontu dla fazy 1
         overall_ok = ok_side_status and ok_front_status
 
+        # Przełączanie stanów
         if overall_ok:
             frames_held += 1
             if frames_held >= REQUIRED_FRAMES:
@@ -441,8 +445,24 @@ def main():
             frames_held = max(0, frames_held - 1)
 
         combined = cv2.hconcat([view_side, view_front])
+
         cv2.putText(combined, f"POWTORZENIA: {reps}", (combined.shape[1] - 250, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8,
                     YELLOW, 2, cv2.LINE_AA)
+
+        # Komunikaty tekstowe na ekranie (skrócone)
+        if state == 1:
+            msg = "PRZYGOTOWANIE: FAZA 1"
+        elif state == 2:
+            msg = "FAZA 2: UNIES BIODRA"
+        elif state == 3:
+            msg = "FAZA 3: PRAWA NOGA W GORE"
+        elif state == 4:
+            msg = "POWROT DO FAZY 2"
+        elif state == 5:
+            msg = "FAZA 4: LEWA NOGA W GORE"
+
+        color = GREEN if overall_ok else RED
+        cv2.putText(combined, msg, (20, combined.shape[0] - 30), cv2.FONT_HERSHEY_SIMPLEX, 0.9, color, 3, cv2.LINE_AA)
 
         if frames_held > 0:
             bar_w = int(400 * (frames_held / REQUIRED_FRAMES))
