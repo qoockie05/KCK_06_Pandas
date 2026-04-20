@@ -12,16 +12,22 @@ import time
 
 
 # ==========================================
-# ASYSTENT GŁOSOWY I MIKROFON
+# ASYSTENT GŁOSOWY I CIĄGŁY NASŁUCH
 # ==========================================
 class VoiceAssistant:
     def __init__(self):
         self.q = queue.Queue()
-        self.answer = None
-        self.thread = threading.Thread(target=self._worker, daemon=True)
-        self.thread.start()
+        self.stop_requested = False
 
-    def _worker(self):
+        # Wątek do mówienia
+        self.speak_thread = threading.Thread(target=self._speak_worker, daemon=True)
+        self.speak_thread.start()
+
+        # Wątek do ciągłego słuchania w tle
+        self.listen_thread = threading.Thread(target=self._listen_worker, daemon=True)
+        self.listen_thread.start()
+
+    def _speak_worker(self):
         if sys.platform == 'win32':
             try:
                 pythoncom.CoInitialize()
@@ -41,50 +47,54 @@ class VoiceAssistant:
         except Exception as e:
             print(f"Nie udało się ustawić polskiego głosu: {e}")
 
-        speaker.Rate = 1
-
-        recognizer = sr.Recognizer()
+        speaker.Rate = 3
 
         while True:
             task = self.q.get()
             if task is None:
                 break
-
-            if isinstance(task, dict) and task.get("action") == "ask":
-                speaker.Speak(task["text"])
-                try:
-                    with sr.Microphone() as source:
-                        recognizer.adjust_for_ambient_noise(source, duration=0.5)
-                        audio = recognizer.listen(source, timeout=5, phrase_time_limit=5)
-                    text = recognizer.recognize_google(audio, language="pl-PL").lower()
-                    self.answer = text
-                except sr.WaitTimeoutError:
-                    self.answer = "cisza"  # Wewnętrzny kod błędu
-                except sr.UnknownValueError:
-                    self.answer = "niezrozumiale"  # Wewnętrzny kod błędu
-                except Exception as e:
-                    print(f"Błąd mikrofonu: {e}")
-                    self.answer = "blad"  # Wewnętrzny kod błędu
-            else:
-                try:
-                    speaker.Speak(task)
-                except Exception as e:
-                    print(f"Błąd mówienia: {e}")
-
+            try:
+                speaker.Speak(task)
+            except Exception as e:
+                print(f"Błąd mówienia: {e}")
             self.q.task_done()
+
+    def _listen_worker(self):
+        """Wątek działający ciągle w tle. Wyłapuje komendy kończące trening."""
+        recognizer = sr.Recognizer()
+        stop_words = ["stop", "koniec", "dość", "wystarczy", "kończymy"]
+
+        try:
+            mic = sr.Microphone()
+            with mic as source:
+                recognizer.adjust_for_ambient_noise(source, duration=1)
+        except Exception as e:
+            print(f"Błąd inicjalizacji mikrofonu: {e}")
+            return
+
+        while not self.stop_requested:
+            try:
+                with mic as source:
+                    # Słucha w krótkich interwałach, żeby pętla nie zawieszała się na długo
+                    audio = recognizer.listen(source, timeout=2, phrase_time_limit=5)
+
+                text = recognizer.recognize_google(audio, language="pl-PL").lower()
+                # Opcjonalny print, byś widziała w konsoli co program podsłuchuje:
+                # print(f"[Nasłuch w tle]: Usłyszałem: '{text}'")
+
+                if any(word in text.split() for word in stop_words) or any(word in text for word in stop_words):
+                    self.stop_requested = True
+                    break
+            except sr.WaitTimeoutError:
+                continue  # Cisza - słuchaj dalej
+            except sr.UnknownValueError:
+                continue  # Niezrozumiały szum - słuchaj dalej
+            except Exception as e:
+                time.sleep(1)
+                continue
 
     def speak(self, text):
         self.q.put(text)
-
-    def ask(self, text):
-        self.answer = None
-        self.q.put({"action": "ask", "text": text})
-
-    def get_answer(self):
-        ans = self.answer
-        if ans is not None:
-            self.answer = None
-        return ans
 
 
 # ==========================================
@@ -481,6 +491,7 @@ def main():
     print("Sterowanie:")
     print("  ESC - wyjscie")
     print("  M   - przelacz obraz / sam szkielet")
+    print("  N   - wymuś koniec treningu")
 
     skeleton_only = SHOW_ONLY_SKELETON
 
@@ -498,31 +509,33 @@ def main():
     ERROR_THRESHOLD = 40
     COOLDOWN_FRAMES = 150
 
-    failed_listen_attempts = 0
-
     assistant.speak("Cześć, zaczynajmy. Połóż się na macie i przygotuj do ćwiczenia.")
 
     while True:
+        # === ODPALA SIĘ GDY MIKROFON (LUB KLAWISZ) ZGŁOSI ZAKOŃCZENIE ===
+        if assistant.stop_requested:
+            assistant.speak("Rozumiem, kończymy na dzisiaj. Dziękuję za wspólny trening, świetna robota!")
+            print("\nZakończono trening. Odpowiedź użytkownika: STOP/KONIEC.")
+            cv2.waitKey(4000)  # Czeka 4 sekundy z włączonym okienkiem aż asystent zdąży dopowiedzieć
+            break
+
         ok_side, frame_side = cap_side.read()
         if not ok_side:
-            # Zamiast wywalać program, ignorujemy ułamek sekundy braku obrazu
             cv2.waitKey(10)
             continue
 
         ok_front, frame_front = cap_front.read()
         if ok_front:
-            # Obrót przedniej kamery z pol.py
             frame_front = cv2.rotate(frame_front, cv2.ROTATE_90_CLOCKWISE)
             frame_front = resize_to_height(frame_front, TARGET_HEIGHT)
         else:
-            # W razie awarii kamery front wypluwamy czarne tło z ostrzeżeniem (pozwala to na testowanie z boku)
             frame_front = np.zeros((TARGET_HEIGHT, 640, 3), dtype=np.uint8)
             cv2.putText(frame_front, "BRAK KAMERY PRZOD", (140, int(TARGET_HEIGHT / 2)), cv2.FONT_HERSHEY_SIMPLEX, 1.2,
                         RED, 3, cv2.LINE_AA)
 
         frame_side = resize_to_height(frame_side, TARGET_HEIGHT)
 
-        check_phase = 1 if state == 5 else state
+        check_phase = state
 
         view_side, ok_side_status, metrics, checks_side = process_side_view(frame_side, pose_side, check_phase,
                                                                             prev_raised_leg,
@@ -536,14 +549,14 @@ def main():
             ok_front_status = True
             checks_front = {}
 
-        overall_ok = ok_side_status and ok_front_status
+        overall_ok = ok_side_status
 
         current_required = REQUIRED_FRAMES_PHASE1 if state == 1 else REQUIRED_FRAMES
 
         # ========================================================
         # MASZYNA STANÓW I WYPOWIEDZI ASYSTENTA
         # ========================================================
-        if overall_ok and state != 5:
+        if overall_ok:
             frames_held += 1
             consecutive_errors = 0
 
@@ -561,19 +574,21 @@ def main():
                     state = 4
                 elif state == 4:
                     reps += 1
+                    # Po zaliczeniu 4 fazy dodajemy powtórzenie, zachęcamy do dalszej pracy i od razu wracamy do jedynki
                     if reps == 1:
-                        assistant.ask("Dobra robota, jedno powtórzenie za tobą. Czy chcesz kontynuować?")
+                        assistant.speak("Dobra robota, jedno powtórzenie za tobą. Zaczynamy kolejne, opuść biodra.")
                     else:
-                        assistant.ask(f"Dobra robota, zrobiliśmy już {reps} powtórzenia. Czy chcesz kontynuować?")
-                    state = 5
+                        assistant.speak(
+                            f"Dobra robota, zrobiliśmy już {reps} powtórzenia. Zaczynamy kolejne, opuść biodra.")
+
+                    state = 1
                     prev_raised_leg = None
-                    failed_listen_attempts = 0  # Wyzerowanie licznika przy zadawaniu pytania
 
                 frames_held = 0
                 error_cooldown = 0
                 consecutive_errors = 0
 
-        elif state != 5:
+        else:
             frames_held = max(0, frames_held - 1)
 
             # --- Obsługa korekt błędów w postawie ---
@@ -600,58 +615,6 @@ def main():
                         consecutive_errors = 0
 
         # ========================================================
-        # LOGIKA NASŁUCHIWANIA I ZAKOŃCZENIA TRENINGU (STAN 5)
-        # ========================================================
-        if state == 5:
-            ans = assistant.get_answer()
-
-            # Klawisze awaryjne w razie problemów z mikrofonem
-            key_check = cv2.waitKey(1) & 0xFF
-            if key_check in (ord('t'), ord('T')):
-                ans = "tak"
-            elif key_check in (ord('n'), ord('N')):
-                ans = "nie"
-
-            if ans is not None:
-                # Kody wewnętrzne mikrofonu oznaczające brak lub błąd w rozpoznaniu mowy
-                internal_errors = ["blad", "niezrozumiale", "cisza"]
-
-                # Precyzyjne słowa kluczowe na TAK oraz NIE
-                yes_words = ["tak", "pewnie", "dalej", "kontynuuj", "jasne", "dawaj", "lecimy"]
-                no_words = ["nie", "kończ", "dość", "wystarczy", "stop"]
-
-                # Sprawdzamy czy w wypowiedzi znajduje się któreś z pożądanych słów
-                is_yes = any(word in ans.split() for word in yes_words)
-                is_no = any(word in ans.split() for word in no_words)
-
-                # Przypadek 1: Użytkownik wyraźnie odmawia
-                if is_no:
-                    assistant.speak("Rozumiem. Koniec treningu, świetna robota!")
-                    print("Zakończono trening. Odpowiedź użytkownika: NIE.")
-                    cv2.waitKey(4000)
-                    break
-
-                # Przypadek 2: Użytkownik wyraźnie chce kontynuować
-                elif is_yes:
-                    assistant.speak("No to lecimy dalej, przygotuj się.")
-                    state = 1
-                    failed_listen_attempts = 0
-
-                # Przypadek 3: Błąd mikrofonu albo słowo spoza listy
-                else:
-                    failed_listen_attempts += 1
-
-                    # Jeśli nie usłyszał dopiero pierwszy raz
-                    if failed_listen_attempts < 2:
-                        assistant.ask("Przepraszam, nie usłyszałam. Powtórz proszę, czy kontynuujemy?")
-                    # Jeśli nie usłyszał po raz drugi z rzędu
-                    else:
-                        assistant.speak(
-                            "Dalej nic nie słyszę, więc zakładam, że robimy kolejne powtórzenie. Przygotuj się.")
-                        state = 1
-                        failed_listen_attempts = 0
-
-        # ========================================================
         # RYSOWANIE INTERFEJSU
         # ========================================================
         combined = cv2.hconcat([view_side, view_front])
@@ -659,19 +622,16 @@ def main():
         cv2.putText(combined, f"POWTORZENIA: {reps}", (view_side.shape[1] - 230, combined.shape[0] - 40),
                     cv2.FONT_HERSHEY_TRIPLEX, 0.7, YELLOW, 1, cv2.LINE_AA)
 
-        if state == 5:
-            cv2.putText(combined, "CZY KONTYNUUJEMY?", (20, combined.shape[0] - 30),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, YELLOW, 2, cv2.LINE_AA)
-
-        if frames_held > 0 and state != 5:
+        if frames_held > 0:
             bar_w = int(400 * (frames_held / current_required))
             cv2.rectangle(combined, (20, combined.shape[0] - 20), (20 + bar_w, combined.shape[0] - 10), GREEN, -1)
 
         cv2.imshow(WINDOW_NAME, combined)
 
         key = cv2.waitKey(1) & 0xFF
-        if key == 27:
-            break
+        if key == 27 or key in (ord('n'), ord('N')):
+            # Alternatywne awaryjne wyjście klawiaturą, jeśli z mikrofonem byłby nadal problem
+            assistant.stop_requested = True
         elif key in (ord('m'), ord('M')):
             skeleton_only = not skeleton_only
 
