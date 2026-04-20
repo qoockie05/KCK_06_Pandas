@@ -646,23 +646,21 @@ def main():
     COOLDOWN_FRAMES = 150
 
     assistant.speak(
-        "Cześć, zaczynajmy. Połóż się na macie i przygotuj do ćwiczenia. Pamiętaj, że słucham komendy 'stop' tylko gdy odpoczywasz pomiędzy powtórzeniami."
+        "Cześć, zaczynajmy. Połóż się na macie i przygotuj do ćwiczenia."
     )
-
     while True:
         # --- Włącza nasłuchiwanie Vosk w tle TYLKO w Fazie 1 ---
         assistant.listen_active = (state == 1)
 
         # === ODPALA SIĘ GDY MIKROFON ZGŁOSI ZAKOŃCZENIE ===
         if assistant.stop_requested:
-            assistant.speak("Rozumiem, kończymy na dzisiaj. Dziękuję za wspólny trening, świetna robota!")
+            assistant.speak("Kończymy na dzisiaj. Dziękuję za wspólny trening, świetna robota!")
             print("\nZakończono trening. Odpowiedź użytkownika: STOP/KONIEC.")
             cv2.waitKey(4000)
             break
 
         ok_side, frame_side = cap_side.read()
         if not ok_side:
-            # NAPRAWA BŁĘDU (Z VA.PY): Ignorowanie gubionej klatki zamiast zamykania programu
             cv2.waitKey(10)
             continue
 
