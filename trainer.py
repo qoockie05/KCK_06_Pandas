@@ -13,17 +13,16 @@ import json
 import pyaudio
 import vosk
 
+
 class VoiceAssistant:
     def __init__(self):
         self.q = queue.Queue()
         self.stop_requested = False
         self.listen_active = False
 
-        # Wątek do mówienia
         self.speak_thread = threading.Thread(target=self._speak_worker, daemon=True)
         self.speak_thread.start()
 
-        # Wątek do ciągłego słuchania w tle
         self.listen_thread = threading.Thread(target=self._listen_worker, daemon=True)
         self.listen_thread.start()
 
@@ -60,17 +59,21 @@ class VoiceAssistant:
             self.q.task_done()
 
     def _listen_worker(self):
-        """Szybki, offline'owy wątek nasłuchiwania w oparciu o Vosk."""
         stop_words = ["stop", "koniec", "dość", "wystarczy", "kończymy"]
 
         try:
-            # Wymaga obecności folderu "model" w tym samym miejscu co ten plik .py
             model = vosk.Model("model")
             recognizer = vosk.KaldiRecognizer(model, 16000)
 
             p = pyaudio.PyAudio()
-            stream = p.open(format=pyaudio.paInt16, channels=1, rate=16000, input=True, frames_per_buffer=8000)
-            stream.stop_stream()  # Na starcie mikrofon jest wyciszony
+            stream = p.open(
+                format=pyaudio.paInt16,
+                channels=1,
+                rate=16000,
+                input=True,
+                frames_per_buffer=8000
+            )
+            stream.stop_stream()
         except Exception as e:
             print("BŁĄD INICJALIZACJI VOSK!")
             print("Upewnij się, że pobrałaś polski model Vosk i umieściłaś go w folderze o nazwie 'model'")
@@ -78,17 +81,14 @@ class VoiceAssistant:
             return
 
         while not self.stop_requested:
-            # Jeśli asystent ma nie słuchać (np. jesteś w fazie 2, 3, 4) - wyłączamy strumień
             if not self.listen_active:
                 if stream.is_active():
                     stream.stop_stream()
                 time.sleep(0.2)
                 continue
 
-            # Włączamy strumień, jeśli wchodzimy do Fazy 1
             if not stream.is_active():
                 stream.start_stream()
-                # Wyciągamy resztki starych dźwięków z bufora
                 try:
                     stream.read(stream.get_read_available(), exception_on_overflow=False)
                 except:
@@ -107,7 +107,7 @@ class VoiceAssistant:
                         if any(word in text.split() for word in stop_words) or any(word in text for word in stop_words):
                             self.stop_requested = True
                             break
-            except Exception as e:
+            except Exception:
                 time.sleep(0.5)
                 continue
 
@@ -115,9 +115,6 @@ class VoiceAssistant:
         self.q.put(text)
 
 
-# ==========================================
-# GŁÓWNY KOD WIZYJNY (Z POL.PY)
-# ==========================================
 CAMERA_FRONT_INDEX = 1
 CAMERA_SIDE_INDEX = 0
 TARGET_HEIGHT = 480
@@ -129,9 +126,6 @@ RED = (0, 0, 255)
 WHITE = (255, 255, 255)
 YELLOW = (0, 255, 255)
 
-# ==========================================
-# SUROWSZE PROGI DLA FAZ 3 I 4 (Z POL.PY)
-# ==========================================
 STAGE2_BRIDGE_MIN = 145
 
 STAGE34_BRIDGE_MIN = 150
@@ -150,7 +144,6 @@ FRONT_PHASE34_HIP_TOL_MIN = 40
 FRONT_PHASE34_ANKLE_DIFF = 22
 FRONT_PHASE34_KNEE_DIFF = 0
 
-# --- SŁOWNIKI BŁĘDÓW DO KOREKCJI ---
 ERROR_MESSAGES_SIDE = {
     "linia_mostka": "Podnieś wyżej biodra.",
     "biodra_wysoko": "Nie opuszczaj bioder, utrzymaj mostek wysoko.",
@@ -199,6 +192,10 @@ def resize_to_height(frame, target_height=480):
 
 def to_px(lm, w, h):
     return int(lm.x * w), int(lm.y * h)
+
+
+def midpoint(p1, p2):
+    return ((p1[0] + p2[0]) // 2, (p1[1] + p2[1]) // 2)
 
 
 def dist(p1, p2):
@@ -251,8 +248,16 @@ def draw_panel(frame, title, status_rows, overall, extra_text=""):
         y += 24
 
     if extra_text:
-        cv2.putText(frame, extra_text, (x0 + 10, y0 + panel_h - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.45, WHITE, 1,
-                    cv2.LINE_AA)
+        cv2.putText(
+            frame,
+            extra_text,
+            (x0 + 10, y0 + panel_h - 10),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.45,
+            WHITE,
+            1,
+            cv2.LINE_AA
+        )
     return frame
 
 
@@ -279,6 +284,13 @@ def get_side_points(landmarks, w, h):
     def p(name):
         return to_px(landmarks[getattr(ids, f"{sfx}_{name}").value], w, h)
 
+    l_hip = to_px(landmarks[ids.LEFT_HIP.value], w, h)
+    r_hip = to_px(landmarks[ids.RIGHT_HIP.value], w, h)
+    l_knee = to_px(landmarks[ids.LEFT_KNEE.value], w, h)
+    r_knee = to_px(landmarks[ids.RIGHT_KNEE.value], w, h)
+    l_ankle = to_px(landmarks[ids.LEFT_ANKLE.value], w, h)
+    r_ankle = to_px(landmarks[ids.RIGHT_ANKLE.value], w, h)
+
     return {
         "side": side,
         "ear": p("EAR"),
@@ -290,12 +302,16 @@ def get_side_points(landmarks, w, h):
         "ankle": p("ANKLE"),
         "heel": p("HEEL"),
         "foot": p("FOOT_INDEX"),
-        "l_hip": to_px(landmarks[ids.LEFT_HIP.value], w, h),
-        "r_hip": to_px(landmarks[ids.RIGHT_HIP.value], w, h),
-        "l_knee": to_px(landmarks[ids.LEFT_KNEE.value], w, h),
-        "r_knee": to_px(landmarks[ids.RIGHT_KNEE.value], w, h),
-        "l_ankle": to_px(landmarks[ids.LEFT_ANKLE.value], w, h),
-        "r_ankle": to_px(landmarks[ids.RIGHT_ANKLE.value], w, h),
+        "l_hip": l_hip,
+        "r_hip": r_hip,
+        "l_knee": l_knee,
+        "r_knee": r_knee,
+        "l_ankle": l_ankle,
+        "r_ankle": r_ankle,
+        "hip_mid": midpoint(l_hip, r_hip),
+        "shoulder_vis": landmarks[getattr(ids, f"{sfx}_SHOULDER").value].visibility,
+        "l_hip_vis": landmarks[ids.LEFT_HIP.value].visibility,
+        "r_hip_vis": landmarks[ids.RIGHT_HIP.value].visibility,
     }
 
 
@@ -334,19 +350,28 @@ def detect_phase_side(points, check_phase, prev_raised_leg=None):
     wrist = points["wrist"]
     hip = points["hip"]
 
+    hip_ref = points["hip_mid"] if check_phase == 1 else hip
+
     support, raised = pick_support_and_raised(points)
     support_knee = support["knee"]
     support_ankle = support["ankle"]
 
     neck_angle = line_angle_deg(shoulder, ear)
-    trunk_angle = line_angle_deg(shoulder, hip)
+    trunk_angle = line_angle_deg(shoulder, hip_ref)
     support_shin_angle = line_angle_deg(support_knee, support_ankle)
-    support_knee_angle = angle(hip, support_knee, support_ankle)
+    support_knee_angle = angle(hip_ref, support_knee, support_ankle)
     arm_angle = angle(shoulder, elbow, wrist)
-    hip_angle = angle(shoulder, hip, support_knee)
+    hip_angle = angle(shoulder, hip_ref, support_knee)
 
-    tulow_lezy = trunk_angle is not None and (trunk_angle <= 40 or trunk_angle >= 140)
+    tulow_lezy = trunk_angle is not None and (trunk_angle <= 25 or trunk_angle >= 155)
     glowa_na_macie = neck_angle is not None and (neck_angle <= 40 or neck_angle >= 140)
+
+    torso_len = dist(shoulder, hip_ref)
+    biodra_nisko = abs(hip_ref[1] - shoulder[1]) <= max(20, int(torso_len * 0.22))
+
+    hips_visible = max(points["l_hip_vis"], points["r_hip_vis"]) >= 0.55
+    shoulder_visible = points["shoulder_vis"] >= 0.55
+    phase1_landmarks_ok = hips_visible and shoulder_visible
 
     raised_leg_angle = angle(raised["hip"], raised["knee"], raised["ankle"])
     raised_leg_straight = raised_leg_angle is not None and raised_leg_angle >= STAGE34_RAISED_LEG_STRAIGHT_MIN
@@ -369,7 +394,7 @@ def detect_phase_side(points, check_phase, prev_raised_leg=None):
         "nogi_ugiete": support_knee_angle is not None and 50 <= support_knee_angle <= 145,
         "obie_stopy_na_ziemi": not raised_leg_up_soft,
         "tulow_lezy": tulow_lezy,
-        "biodra_na_macie": is_lying_down,
+        "biodra_na_macie": biodra_nisko,
         "rece_przy_ciele": arm_angle is not None and arm_angle >= 145,
         "glowa_na_macie": glowa_na_macie,
     }
@@ -416,7 +441,8 @@ def detect_phase_side(points, check_phase, prev_raised_leg=None):
     }
 
     if check_phase == 1:
-        return stage1, all(stage1.values()), metrics
+        overall = all(stage1.values()) and phase1_landmarks_ok
+        return stage1, overall, metrics
     elif check_phase == 2:
         return stage2, all(stage2.values()), metrics
     elif check_phase == 3:
@@ -609,9 +635,6 @@ def process_front_view(frame, pose_model, check_phase, skeleton_only=False):
     return output, overall, checks
 
 
-# ==========================================
-# GŁÓWNY PROGRAM
-# ==========================================
 def main():
     assistant = VoiceAssistant()
 
@@ -645,14 +668,11 @@ def main():
     ERROR_THRESHOLD = 40
     COOLDOWN_FRAMES = 150
 
-    assistant.speak(
-        "Cześć, zaczynajmy. Połóż się na macie i przygotuj do ćwiczenia."
-    )
+    assistant.speak("Cześć, zaczynajmy. Połóż się na macie i przygotuj do ćwiczenia.")
+
     while True:
-        # --- Włącza nasłuchiwanie Vosk w tle TYLKO w Fazie 1 ---
         assistant.listen_active = (state == 1)
 
-        # === ODPALA SIĘ GDY MIKROFON ZGŁOSI ZAKOŃCZENIE ===
         if assistant.stop_requested:
             assistant.speak("Kończymy na dzisiaj. Dziękuję za wspólny trening, świetna robota!")
             print("\nZakończono trening. Odpowiedź użytkownika: STOP/KONIEC.")
@@ -666,13 +686,20 @@ def main():
 
         ok_front, frame_front = cap_front.read()
         if ok_front:
-            # Obrót przedniej kamery z pol.py
             frame_front = cv2.rotate(frame_front, cv2.ROTATE_90_CLOCKWISE)
             frame_front = resize_to_height(frame_front, TARGET_HEIGHT)
         else:
             frame_front = np.zeros((TARGET_HEIGHT, 640, 3), dtype=np.uint8)
-            cv2.putText(frame_front, "BRAK KAMERY PRZOD", (140, int(TARGET_HEIGHT / 2)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 1.2, RED, 3, cv2.LINE_AA)
+            cv2.putText(
+                frame_front,
+                "BRAK KAMERY PRZOD",
+                (140, int(TARGET_HEIGHT / 2)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                1.2,
+                RED,
+                3,
+                cv2.LINE_AA
+            )
 
         frame_side = resize_to_height(frame_side, TARGET_HEIGHT)
 
@@ -694,9 +721,6 @@ def main():
         overall_ok = ok_side_status and ok_front_status
         current_required = REQUIRED_FRAMES_PHASE1 if state == 1 else REQUIRED_FRAMES
 
-        # ========================================================
-        # MASZYNA STANÓW I WYPOWIEDZI ASYSTENTA (LOSOWE TEKSTY)
-        # ========================================================
         if overall_ok:
             frames_held += 1
             consecutive_errors = 0
@@ -710,6 +734,7 @@ def main():
                     ])
                     assistant.speak(msg)
                     state = 2
+
                 elif state == 2:
                     msg = random.choice([
                         "Dobra robota, podnieś prawą nogę.",
@@ -719,6 +744,7 @@ def main():
                     ])
                     assistant.speak(msg)
                     state = 3
+
                 elif state == 3:
                     if "raised" in metrics:
                         prev_raised_leg = metrics["raised"]["name"]
@@ -731,6 +757,7 @@ def main():
                     ])
                     assistant.speak(msg)
                     state = 4
+
                 elif state == 4:
                     reps += 1
 
@@ -754,6 +781,7 @@ def main():
                 frames_held = 0
                 error_cooldown = 0
                 consecutive_errors = 0
+
         else:
             frames_held = max(0, frames_held - 1)
 
@@ -779,9 +807,6 @@ def main():
                         error_cooldown = COOLDOWN_FRAMES
                         consecutive_errors = 0
 
-        # ========================================================
-        # RYSOWANIE INTERFEJSU
-        # ========================================================
         combined = cv2.hconcat([view_side, view_front])
 
         cv2.putText(
@@ -814,4 +839,3 @@ def main():
     cv2.destroyAllWindows()
 
     return reps
-

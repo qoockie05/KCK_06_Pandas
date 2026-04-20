@@ -76,7 +76,7 @@ class HomeView(QWidget):
 
         right_widget=QWidget()
         right_widget.setLayout(right)
-        right_widget.setFixedWidth(320)
+        right_widget.setFixedWidth(350)
 
         main.addWidget(center_widget)
         main.addWidget(right_widget)

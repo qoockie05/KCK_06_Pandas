@@ -1,6 +1,8 @@
 from PyQt5.QtWidgets import *
 from PyQt5.QtCore import Qt, QDate
 from PyQt5.QtGui import QPainter, QColor
+from PyQt5.QtWidgets import QTableView, QHeaderView
+
 
 MONTHS_PL = {
     1: "Styczeń", 2: "Luty", 3: "Marzec", 4: "Kwiecień",
@@ -37,6 +39,20 @@ class CalendarGrid(QCalendarWidget):
                 border: none;
             }
         """)
+
+        view = self.findChild(QTableView, "qt_calendar_calendarview")
+        if view is None:
+            view = self.findChild(QTableView)
+
+        if view:
+            view.horizontalHeader().setSectionResizeMode(QHeaderView.Fixed)
+            view.verticalHeader().setSectionResizeMode(QHeaderView.Fixed)
+            view.horizontalHeader().setDefaultSectionSize(34)
+            view.verticalHeader().setDefaultSectionSize(34)
+            view.horizontalHeader().setMinimumSectionSize(34)
+            view.verticalHeader().setMinimumSectionSize(34)
+            view.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            view.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 
     def set_training_days(self, days):
         self.training_days = set(days)
@@ -77,8 +93,8 @@ class CustomCalendar(QWidget):
         layout = QVBoxLayout()
         header = QHBoxLayout()
 
-        self.prev_button = QPushButton("⬅")
-        self.next_button = QPushButton("➡")
+        self.prev_button = QPushButton("←")
+        self.next_button = QPushButton("→")
 
         self.prev_button.setObjectName("arrow_button")
         self.next_button.setObjectName("arrow_button")
@@ -91,7 +107,7 @@ class CustomCalendar(QWidget):
         header.addWidget(self.next_button)
 
         self.calendar = CalendarGrid()
-        self.calendar.setFixedSize(300, 260)
+        self.calendar.setFixedSize(260, 260)
 
         self.prev_button.clicked.connect(self.prev_month)
         self.next_button.clicked.connect(self.next_month)

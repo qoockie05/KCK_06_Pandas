@@ -76,7 +76,8 @@ class App(QWidget):
         self.setLayout(main)
 
         self.training_data={
-            "2026-04-19": 13,
+            "2026-04-22": 9,
+            "2026-04-20": 2,
             "2026-04-15": 5,
             "2026-04-09": 14,
             "2026-04-05": 7,
@@ -169,6 +170,7 @@ class App(QWidget):
         day_sum=0
         week_sum=0
         month_sum=0
+        start_of_week=today-timedelta(days=today.weekday())
 
         for date_str, reps in self.training_data.items():
             d=datetime.strptime(date_str, "%Y-%m-%d").date()
@@ -176,7 +178,7 @@ class App(QWidget):
             if d==today:
                 day_sum+=reps
 
-            if today-timedelta(days=7)<=d<=today:
+            if start_of_week<=d<=today:
                 week_sum+=reps
 
             if d.month==today.month and d.year==today.year:
@@ -227,8 +229,5 @@ app=QApplication([])
 app.setFont(QFont("Arial", 11))
 window=App()
 
-screen=QApplication.primaryScreen()
-size=screen.size()
-window.resize(int(size.width()*0.8), int(size.height()*0.8))
-window.show()
+window.showFullScreen()
 app.exec_()
