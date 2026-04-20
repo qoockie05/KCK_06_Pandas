@@ -6,22 +6,24 @@ import threading
 import queue
 import pythoncom
 import win32com.client
-import speech_recognition as sr
 import sys
 import time
+import random
+import json
+import pyaudio
+import vosk
 
-
-# ==========================================
-# ASYSTENT GŁOSOWY I CIĄGŁY NASŁUCH
-# ==========================================
 class VoiceAssistant:
     def __init__(self):
         self.q = queue.Queue()
         self.stop_requested = False
+        self.listen_active = False
 
+        # Wątek do mówienia
         self.speak_thread = threading.Thread(target=self._speak_worker, daemon=True)
         self.speak_thread.start()
 
+        # Wątek do ciągłego słuchania w tle
         self.listen_thread = threading.Thread(target=self._listen_worker, daemon=True)
         self.listen_thread.start()
 
@@ -58,33 +60,55 @@ class VoiceAssistant:
             self.q.task_done()
 
     def _listen_worker(self):
-        recognizer = sr.Recognizer()
+        """Szybki, offline'owy wątek nasłuchiwania w oparciu o Vosk."""
         stop_words = ["stop", "koniec", "dość", "wystarczy", "kończymy"]
 
         try:
-            mic = sr.Microphone()
-            with mic as source:
-                recognizer.adjust_for_ambient_noise(source, duration=1)
+            # Wymaga obecności folderu "model" w tym samym miejscu co ten plik .py
+            model = vosk.Model("model")
+            recognizer = vosk.KaldiRecognizer(model, 16000)
+
+            p = pyaudio.PyAudio()
+            stream = p.open(format=pyaudio.paInt16, channels=1, rate=16000, input=True, frames_per_buffer=8000)
+            stream.stop_stream()  # Na starcie mikrofon jest wyciszony
         except Exception as e:
-            print(f"Błąd inicjalizacji mikrofonu: {e}")
+            print("BŁĄD INICJALIZACJI VOSK!")
+            print("Upewnij się, że pobrałaś polski model Vosk i umieściłaś go w folderze o nazwie 'model'")
+            print(f"Szczegóły: {e}")
             return
 
         while not self.stop_requested:
+            # Jeśli asystent ma nie słuchać (np. jesteś w fazie 2, 3, 4) - wyłączamy strumień
+            if not self.listen_active:
+                if stream.is_active():
+                    stream.stop_stream()
+                time.sleep(0.2)
+                continue
+
+            # Włączamy strumień, jeśli wchodzimy do Fazy 1
+            if not stream.is_active():
+                stream.start_stream()
+                # Wyciągamy resztki starych dźwięków z bufora
+                try:
+                    stream.read(stream.get_read_available(), exception_on_overflow=False)
+                except:
+                    pass
+
             try:
-                with mic as source:
-                    audio = recognizer.listen(source, timeout=2, phrase_time_limit=5)
+                data = stream.read(4000, exception_on_overflow=False)
+                if len(data) == 0:
+                    continue
 
-                text = recognizer.recognize_google(audio, language="pl-PL").lower()
+                if recognizer.AcceptWaveform(data):
+                    result = json.loads(recognizer.Result())
+                    text = result.get("text", "").lower()
 
-                if any(word in text.split() for word in stop_words) or any(word in text for word in stop_words):
-                    self.stop_requested = True
-                    break
-            except sr.WaitTimeoutError:
-                continue
-            except sr.UnknownValueError:
-                continue
-            except Exception:
-                time.sleep(1)
+                    if text:
+                        if any(word in text.split() for word in stop_words) or any(word in text for word in stop_words):
+                            self.stop_requested = True
+                            break
+            except Exception as e:
+                time.sleep(0.5)
                 continue
 
     def speak(self, text):
@@ -92,7 +116,7 @@ class VoiceAssistant:
 
 
 # ==========================================
-# GŁÓWNY KOD WIZYJNY
+# GŁÓWNY KOD WIZYJNY (Z POL.PY)
 # ==========================================
 CAMERA_FRONT_INDEX = 1
 CAMERA_SIDE_INDEX = 0
@@ -106,7 +130,7 @@ WHITE = (255, 255, 255)
 YELLOW = (0, 255, 255)
 
 # ==========================================
-# SUROWSZE PROGI DLA FAZ 3 I 4
+# SUROWSZE PROGI DLA FAZ 3 I 4 (Z POL.PY)
 # ==========================================
 STAGE2_BRIDGE_MIN = 145
 
@@ -618,22 +642,30 @@ def main():
     ERROR_THRESHOLD = 40
     COOLDOWN_FRAMES = 150
 
-    assistant.speak("Cześć, zaczynajmy. Połóż się na macie i przygotuj do ćwiczenia.")
+    assistant.speak(
+        "Cześć, zaczynajmy. Połóż się na macie i przygotuj do ćwiczenia. Pamiętaj, że słucham komendy 'stop' tylko gdy odpoczywasz pomiędzy powtórzeniami."
+    )
 
     while True:
+        # --- Włącza nasłuchiwanie Vosk w tle TYLKO w Fazie 1 ---
+        assistant.listen_active = (state == 1)
+
+        # === ODPALA SIĘ GDY MIKROFON ZGŁOSI ZAKOŃCZENIE ===
         if assistant.stop_requested:
             assistant.speak("Rozumiem, kończymy na dzisiaj. Dziękuję za wspólny trening, świetna robota!")
-            print("\\nZakończono trening. Odpowiedź użytkownika: STOP/KONIEC.")
+            print("\nZakończono trening. Odpowiedź użytkownika: STOP/KONIEC.")
             cv2.waitKey(4000)
             break
 
         ok_side, frame_side = cap_side.read()
         if not ok_side:
+            # NAPRAWA BŁĘDU (Z VA.PY): Ignorowanie gubionej klatki zamiast zamykania programu
             cv2.waitKey(10)
             continue
 
         ok_front, frame_front = cap_front.read()
         if ok_front:
+            # Obrót przedniej kamery z pol.py
             frame_front = cv2.rotate(frame_front, cv2.ROTATE_90_CLOCKWISE)
             frame_front = resize_to_height(frame_front, TARGET_HEIGHT)
         else:
@@ -661,30 +693,60 @@ def main():
         overall_ok = ok_side_status and ok_front_status
         current_required = REQUIRED_FRAMES_PHASE1 if state == 1 else REQUIRED_FRAMES
 
+        # ========================================================
+        # MASZYNA STANÓW I WYPOWIEDZI ASYSTENTA (LOSOWE TEKSTY)
+        # ========================================================
         if overall_ok:
             frames_held += 1
             consecutive_errors = 0
 
             if frames_held >= current_required:
                 if state == 1:
-                    assistant.speak("Okej, teraz podnieś biodra.")
+                    msg = random.choice([
+                        "Okej, teraz podnieś biodra.",
+                        "Świetnie, wypchnij miednicę w górę.",
+                        "Gotowe, unieś biodra mocno do góry."
+                    ])
+                    assistant.speak(msg)
                     state = 2
                 elif state == 2:
-                    assistant.speak("Dobra robota, podnieś prawą nogę wysoko.")
+                    msg = random.choice([
+                        "Dobra robota, podnieś prawą nogę.",
+                        "Trzymaj biodra w górze i unieś prawą nogę.",
+                        "Super, teraz prawa noga wędruje w górę.",
+                        "Dobra robota, podnieś prawą nogę wysoko."
+                    ])
+                    assistant.speak(msg)
                     state = 3
                 elif state == 3:
                     if "raised" in metrics:
                         prev_raised_leg = metrics["raised"]["name"]
-                    assistant.speak("Super. Teraz zmień nogę, lewa w górę i utrzymaj biodra wysoko.")
+
+                    msg = random.choice([
+                        "Super. Teraz zmień nogę, lewa w górę.",
+                        "Pięknie. Opuść prawą i od razu podnieś lewą nogę.",
+                        "Dobra, zamieniamy strony. Lewa noga w górę.",
+                        "Super. Teraz zmień nogę, lewa w górę i utrzymaj biodra wysoko."
+                    ])
+                    assistant.speak(msg)
                     state = 4
                 elif state == 4:
                     reps += 1
+
                     if reps == 1:
-                        assistant.speak("Dobra robota, jedno powtórzenie za tobą. Zaczynamy kolejne, opuść biodra.")
+                        msg = random.choice([
+                            "Dobra robota, jedno powtórzenie za tobą. Zaczynamy kolejne, opuść biodra.",
+                            "Świetny start, pierwsze powtórzenie gotowe. Wracamy na matę.",
+                            "Mamy to! Jedno za nami. Opuść biodra i jedziemy dalej."
+                        ])
                     else:
-                        assistant.speak(
-                            f"Dobra robota, zrobiliśmy już {reps} powtórzenia. Zaczynamy kolejne, opuść biodra."
-                        )
+                        msg = random.choice([
+                            f"Dobra robota, zrobiliśmy już {reps} powtórzenia. Zaczynamy kolejne, opuść biodra.",
+                            f"Świetnie ci idzie, to już {reps} powtórzenie. Wracamy na matę.",
+                            f"Super! Mamy {reps} powtórzeń na koncie. Odłóż biodra i jedziemy dalej."
+                        ])
+
+                    assistant.speak(msg)
                     state = 1
                     prev_raised_leg = None
 
@@ -716,6 +778,9 @@ def main():
                         error_cooldown = COOLDOWN_FRAMES
                         consecutive_errors = 0
 
+        # ========================================================
+        # RYSOWANIE INTERFEJSU
+        # ========================================================
         combined = cv2.hconcat([view_side, view_front])
 
         cv2.putText(
