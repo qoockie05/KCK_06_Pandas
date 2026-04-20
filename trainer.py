@@ -622,6 +622,9 @@ def main():
         print(f"Nie udalo sie otworzyc GŁÓWNEJ kamery z boku (indeks {CAMERA_SIDE_INDEX}).")
         return
 
+    cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
+    cv2.setWindowProperty(WINDOW_NAME, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+
     print("Sterowanie:")
     print("  ESC - wyjscie")
     print("  M   - przelacz obraz / sam szkielet")

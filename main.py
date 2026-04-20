@@ -52,6 +52,7 @@ class App(QWidget):
 
 
         self.stack=QStackedLayout()
+        self.home = HomeView()
         self.home.start_btn.clicked.connect(self.start_training)
         self.stats=StatisticsView()
         self.settings=SettingsView()
